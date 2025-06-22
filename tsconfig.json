@@ -1,10 +1,11 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
-    "module": "es2020",
-    "moduleResolution": "Node",
+    "target": "ES2020",                 // ✅ Required for import.meta
+    "module": "NodeNext",               // ✅ Enables ESM support in Node
+    "moduleResolution": "NodeNext",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
     "strict": true,
-    "esModuleInterop": true
-  },
-  "include": ["index.ts"]
+    "skipLibCheck": true
+  }
 }

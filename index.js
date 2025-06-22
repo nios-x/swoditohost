@@ -2,51 +2,58 @@ import { randomUUID } from "crypto";
 import http from "http";
 import fs from "fs";
 import path from "path";
-import { WebSocketServer } from "ws";
 import { fileURLToPath } from "url";
-// Utility to support __dirname in ESM/TS
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-// --- Game State ---
-const players = new Map();
-const room = new Map();
-// --- Serve Static Files from /dist (React build) ---
-const httpServer = http.createServer((req, res) => {
-    const reqUrl = req.url === "/" ? "/index.html" : req.url || "/";
-    const filePath = path.join(__dirname, "dist", reqUrl);
-    const ext = path.extname(filePath).toLowerCase();
-    const mime = {
+import { WebSocketServer } from "ws";
+// --- Setup for __dirname in ES module ---
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const distDir = path.join(__dirname, "dist");
+// --- Content-Type helper ---
+const getContentType = (ext) => {
+    const map = {
         ".html": "text/html",
-        ".js": "application/javascript",
+        ".js": "text/javascript",
         ".css": "text/css",
         ".json": "application/json",
         ".png": "image/png",
         ".jpg": "image/jpeg",
-        ".svg": "image/svg+xml",
+        ".jpeg": "image/jpeg",
         ".ico": "image/x-icon",
+        ".svg": "image/svg+xml",
+        ".woff2": "font/woff2",
+        ".ttf": "font/ttf",
     };
-    fs.readFile(filePath, (err, data) => {
-        res.setHeader("Access-Control-Allow-Origin", "*");
-        res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-        if (err) {
-            // Fallback to index.html for SPA routing
-            fs.readFile(path.join(__dirname, "dist", "index.html"), (fallbackErr, fallbackData) => {
-                if (fallbackErr) {
-                    res.writeHead(500);
-                    return res.end("Internal Server Error");
-                }
-                res.writeHead(200, { "Content-Type": "text/html" });
-                res.end(fallbackData);
+    return map[ext] || "application/octet-stream";
+};
+// --- HTTP Server for React files ---
+const httpServer = http.createServer((req, res) => {
+    const parsedUrl = req.url || "/";
+    const safePath = parsedUrl.split("?")[0]; // Remove query params
+    let filePath = path.join(distDir, safePath === "/" ? "/index.html" : safePath);
+    fs.stat(filePath, (err, stats) => {
+        if (err || !stats.isFile()) {
+            // Fallback to index.html for SPA
+            filePath = path.join(distDir, "index.html");
+        }
+        fs.readFile(filePath, (err, data) => {
+            if (err) {
+                res.writeHead(500);
+                res.end("500 Internal Server Error");
+                return;
+            }
+            const ext = path.extname(filePath);
+            const contentType = getContentType(ext);
+            res.writeHead(200, {
+                "Content-Type": contentType,
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
             });
-        }
-        else {
-            res.writeHead(200, { "Content-Type": mime[ext] || "application/octet-stream" });
             res.end(data);
-        }
+        });
     });
 });
-// --- WebSocket Server ---
+const players = new Map();
+const room = new Map();
 const ws = new WebSocketServer({ server: httpServer });
 ws.on("connection", (_socket) => {
     const id = randomUUID();
@@ -60,21 +67,24 @@ ws.on("connection", (_socket) => {
         isReady: false,
         isRunning: false,
     });
-    socket.on("message", (res) => {
+    socket.on("message", async (res) => {
         const data = JSON.parse(res.toString());
-        const player = players.get(socket.id);
-        if (!player)
-            return;
         if (data.pos) {
-            player.coordinates = {
-                x: data.pos.x,
-                y: data.pos.y,
-                z: data.pos.z,
-            };
-            player.direction = data.pos.direction;
-            player.isRunning = data.pos.isRunning;
+            const player = players.get(socket.id);
+            if (player) {
+                player.coordinates = {
+                    x: data.pos.x,
+                    y: data.pos.y,
+                    z: data.pos.z,
+                };
+                player.direction = data.pos.direction;
+                player.isRunning = data.pos.isRunning;
+            }
         }
         else if (typeof data.room === "string" && data.name) {
+            const player = players.get(socket.id);
+            if (!player)
+                return;
             player.name = data.name;
             if (room.has(data.room)) {
                 const members = room.get(data.room);
@@ -104,7 +114,7 @@ ws.on("connection", (_socket) => {
         }
     });
 });
-// --- Broadcast Other Players (60 FPS) ---
+// --- Broadcast positions to all players in room ---
 setInterval(() => {
     for (const [id, player] of players.entries()) {
         if (!player.isReady || !player.room)
@@ -139,9 +149,8 @@ setInterval(() => {
             console.error(`Failed to send to player ${id}`, err);
         }
     }
-}, 1000 / 60);
-// --- Start Server ---
-const PORT = 3000;
-httpServer.listen(PORT, () => {
-    console.log(`🟢 Server listening at http://localhost:${PORT}`);
+}, 1000 / 30);
+// --- Start the server ---
+httpServer.listen(3000, () => {
+    console.log("Server listening on http://localhost:3000");
 });
